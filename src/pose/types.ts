@@ -10,10 +10,13 @@ export type LandmarkName =
   | 'left_ankle' | 'right_ankle'
 
 export type LandmarkMap = Partial<Record<LandmarkName, Point2D>>
+export type FaceLandmarkName = 'face_left_eye' | 'face_right_eye' | 'face_nose' | 'face_mouth_left' | 'face_mouth_right' | 'face_chin'
+export type FaceLandmarkMap = Partial<Record<FaceLandmarkName, Point2D>>
 export type FeatureName = string
 
 export interface PoseAnnotation {
   landmarks: LandmarkMap
+  faceLandmarks?: FaceLandmarkMap
   imageWidth: number
   imageHeight: number
   updatedAt: string
@@ -25,6 +28,7 @@ export interface ReferencePose {
   artworkPath: string
   allowMirror: boolean
   requiredLandmarks: LandmarkName[]
+  requiredFaceLandmarks?: FaceLandmarkName[]
   recommendedCameraAngle: string
   weights: Record<FeatureName, number>
   tolerances: Record<FeatureName, number>
@@ -38,6 +42,7 @@ export interface PoseFeatures {
   usableLandmarks: number
   missingLandmarks: LandmarkName[]
   quality: number
+  faceQuality: number
 }
 
 export interface PoseScore {
@@ -61,6 +66,7 @@ export interface DetectorMetrics {
   quality: number
   cameraReady: boolean
   modelReady: boolean
+  faceModelReady: boolean
 }
 
 export interface PoseLandmark3D extends Point2D {

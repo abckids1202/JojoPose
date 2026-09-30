@@ -1,12 +1,12 @@
 import { POSE_ENGINE_CONFIG } from './config'
 import { extractPoseFeatures, featureTolerances, regionForFeature } from './features'
 import { gaussianSimilarity, weightedMean } from './math'
-import { mirrorLandmarks } from './landmarks'
-import type { LandmarkMap, PoseFeatures, PoseScore, ReferencePose } from './types'
+import { mirrorFaceLandmarks, mirrorLandmarks } from './landmarks'
+import type { FaceLandmarkMap, LandmarkMap, PoseFeatures, PoseScore, ReferencePose } from './types'
 
 function scoreAgainst(reference: ReferencePose, current: PoseFeatures, mirrored: boolean): PoseScore {
   if (!reference.annotation) return { poseId: reference.id, displayName: reference.displayName, percentage: 0, similarity: 0, mirrored, quality: 0, regions: { arms: 0, torso: 0, legs: 0, head: 0 }, feedback: ['Annotate this reference before matching.'], matchedFeatures: 0 }
-  const referenceFeatures = extractPoseFeatures(reference.annotation.landmarks)
+  const referenceFeatures = extractPoseFeatures(reference.annotation.landmarks, reference.annotation.faceLandmarks)
   const errors: Array<{ name: string; error: number; similarity: number; weight: number }> = []
   const tolerances = { ...featureTolerances(referenceFeatures.values), ...reference.tolerances }
   for (const [name, expected] of Object.entries(referenceFeatures.values)) {
@@ -34,20 +34,20 @@ function feedbackFor(feature: string, error: number, direction: 'more' | 'less')
   return messages[feature] ?? `Adjust ${feature.split('_').join(' ')} toward the reference.`
 }
 
-export function comparePose(reference: ReferencePose, currentPoints: LandmarkMap): PoseScore {
-  const current = extractPoseFeatures(currentPoints)
+export function comparePose(reference: ReferencePose, currentPoints: LandmarkMap, currentFacePoints: FaceLandmarkMap = {}): PoseScore {
+  const current = extractPoseFeatures(currentPoints, currentFacePoints)
   const normal = scoreAgainst(reference, current, false)
   if (!reference.allowMirror) return normal
-  const mirrored = scoreAgainst(reference, extractPoseFeatures(mirrorLandmarks(currentPoints)), true)
+  const mirrored = scoreAgainst(reference, extractPoseFeatures(mirrorLandmarks(currentPoints), mirrorFaceLandmarks(currentFacePoints)), true)
   return mirrored.similarity > normal.similarity ? mirrored : normal
 }
 
-export function scoreAllPoses(references: ReferencePose[], currentPoints: LandmarkMap): PoseScore[] {
-  return references.filter(reference => Boolean(reference.annotation)).map(reference => comparePose(reference, currentPoints)).sort((a, b) => b.similarity - a.similarity)
+export function scoreAllPoses(references: ReferencePose[], currentPoints: LandmarkMap, currentFacePoints: FaceLandmarkMap = {}): PoseScore[] {
+  return references.filter(reference => Boolean(reference.annotation)).map(reference => comparePose(reference, currentPoints, currentFacePoints)).sort((a, b) => b.similarity - a.similarity)
 }
 
-export function getBestMatch(references: ReferencePose[], currentPoints: LandmarkMap): PoseScore | undefined {
-  const scores = scoreAllPoses(references, currentPoints)
+export function getBestMatch(references: ReferencePose[], currentPoints: LandmarkMap, currentFacePoints: FaceLandmarkMap = {}): PoseScore | undefined {
+  const scores = scoreAllPoses(references, currentPoints, currentFacePoints)
   if (!scores.length) return undefined
   const best = scores[0]; const second = scores[1]
   if (best.similarity < POSE_ENGINE_CONFIG.possibleMatchThreshold || (second && best.similarity - second.similarity < POSE_ENGINE_CONFIG.minimumPoseMargin)) return undefined
