@@ -13,6 +13,8 @@ export const POSE_ENGINE_CONFIG = {
   holdDurationMs: 1200,
   defaultTolerance: 18,
   scoreFloor: 0.05,
+  bodyScoreWeight: 0.75,
+  faceScoreWeight: 0.25,
 } as const
 
 export const FEATURE_WEIGHTS: Record<FeatureName, number> = {

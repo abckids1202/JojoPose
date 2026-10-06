@@ -9,7 +9,7 @@ export class TemporalPoseSmoother {
   reset() { this.history = []; this.confirmedId = undefined; this.confirmedAt = 0 }
 
   push(score: PoseScore | undefined, timestamp = performance.now()): TemporalResult {
-    const next = score ?? { poseId: 'none', displayName: 'NO POSE MATCH', percentage: 0, similarity: 0, mirrored: false, quality: 0, regions: { arms: 0, torso: 0, legs: 0, head: 0 }, feedback: [], matchedFeatures: 0 }
+    const next = score ?? { poseId: 'none', displayName: 'NO POSE MATCH', percentage: 0, similarity: 0, mirrored: false, quality: 0, regions: { arms: 0, torso: 0, legs: 0, head: 0 }, feedback: [], matchedFeatures: 0, bodySimilarity: 0, faceSimilarity: 0, faceQuality: 0 }
     this.history.push({ id: score?.poseId, score: next, timestamp })
     this.history = this.history.slice(-POSE_ENGINE_CONFIG.smoothingWindowFrames)
     const grouped = new Map<string, { count: number; score: PoseScore }>()

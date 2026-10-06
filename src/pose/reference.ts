@@ -12,14 +12,21 @@ export const REFERENCE_POSES: ReferencePose[] = [
   { id: 'metallica', displayName: 'METALLICA', artworkPath: '/poses/Metallica.png', allowMirror: true, requiredLandmarks: BODY_NAMES, requiredFaceLandmarks: faceAnnotationNames, recommendedCameraAngle: 'Upper body / slight camera-left', weights: { ...FEATURE_WEIGHTS, torso_lean: 2, head_offset_x: 1.4 }, tolerances: {} },
 ]
 
-const STORAGE_KEY = 'jojo-pose-reference-annotations-v1'
+const STORAGE_KEY = 'jojo-pose-reference-annotations-v2'
+const LEGACY_STORAGE_KEY = 'jojo-pose-reference-annotations-v1'
+export const ANNOTATION_SCHEMA_VERSION = 2
 
 export function loadAnnotations(): Record<string, PoseAnnotation> {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') as Record<string, PoseAnnotation> } catch { return {} }
+  try {
+    const current = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null') as Record<string, PoseAnnotation> | null
+    if (current) return current
+    const legacy = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) || '{}') as Record<string, Omit<PoseAnnotation, 'schemaVersion'>>
+    return Object.fromEntries(Object.entries(legacy).map(([id, annotation]) => [id, { ...annotation, schemaVersion: 1 } as PoseAnnotation]))
+  } catch { return {} }
 }
 
 export function saveAnnotation(poseId: string, annotation: PoseAnnotation): ReferencePose[] {
-  const all = loadAnnotations(); all[poseId] = annotation; localStorage.setItem(STORAGE_KEY, JSON.stringify(all)); return getReferencePoses()
+  const all = loadAnnotations(); all[poseId] = { ...annotation, schemaVersion: ANNOTATION_SCHEMA_VERSION }; localStorage.setItem(STORAGE_KEY, JSON.stringify(all)); return getReferencePoses()
 }
 
 export function clearAnnotation(poseId: string) { const all = loadAnnotations(); delete all[poseId]; localStorage.setItem(STORAGE_KEY, JSON.stringify(all)) }
@@ -27,10 +34,12 @@ export function clearAnnotation(poseId: string) { const all = loadAnnotations();
 export function getReferencePoses(): ReferencePose[] { const annotations = loadAnnotations(); return REFERENCE_POSES.map(pose => ({ ...pose, annotation: annotations[pose.id] })) }
 
 export function exportReferenceBundle() {
-  const blob = new Blob([JSON.stringify({ version: 1, generatedAt: new Date().toISOString(), poses: getReferencePoses() }, null, 2)], { type: 'application/json' })
+  const blob = new Blob([JSON.stringify({ version: ANNOTATION_SCHEMA_VERSION, generatedAt: new Date().toISOString(), poses: getReferencePoses() }, null, 2)], { type: 'application/json' })
   const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'jojo-reference-poses.json'; link.click(); URL.revokeObjectURL(link.href)
 }
 
-export const annotationProgress = (pose: ReferencePose): number => { const body = pose.annotation ? Object.keys(pose.annotation.landmarks).length : 0; const face = pose.annotation?.faceLandmarks ? Object.keys(pose.annotation.faceLandmarks).length : 0; return Math.round((body + face) / (pose.requiredLandmarks.length + (pose.requiredFaceLandmarks?.length ?? 0)) * 100) }
+export const annotationProgress = (pose: ReferencePose): number => { const requiredFace = pose.requiredFaceLandmarks ?? []; const body = pose.annotation ? pose.requiredLandmarks.filter(name => Boolean(pose.annotation?.landmarks[name])).length : 0; const face = pose.annotation?.faceLandmarks ? requiredFace.filter(name => Boolean(pose.annotation?.faceLandmarks?.[name])).length : 0; return Math.min(100, Math.round((body + face) / (pose.requiredLandmarks.length + requiredFace.length) * 100)) }
+export const isReferenceReady = (pose: ReferencePose): boolean => Boolean(pose.annotation?.schemaVersion === ANNOTATION_SCHEMA_VERSION && annotationProgress(pose) === 100)
+export const annotationStatus = (pose: ReferencePose): string => isReferenceReady(pose) ? 'ready for matching' : pose.annotation?.schemaVersion !== ANNOTATION_SCHEMA_VERSION ? 'face annotation required' : `${annotationProgress(pose)}% annotated`
 
 export const annotationNames = ['nose', 'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow', 'left_wrist', 'right_wrist', 'left_hip', 'right_hip', 'left_knee', 'right_knee', 'left_ankle', 'right_ankle'] as LandmarkName[]

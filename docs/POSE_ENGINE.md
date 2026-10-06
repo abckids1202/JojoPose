@@ -4,9 +4,9 @@ This project now has a pre-training geometric pipeline. It does not pretend that
 
 ## Architecture
 
-`Reference artwork → manual 13-point annotation → normalized features → weighted matcher`
+`Reference artwork → manual 13 body + 6 face annotation → normalized features → weighted matcher`
 
-`Webcam → MediaPipe Pose Landmarker → 13 mapped landmarks → normalized features → compare all references → temporal confirmation → feedback`
+`Webcam → MediaPipe Pose + Face Landmarkers → 13 body + 6 face landmarks → normalized features → compare complete references → temporal confirmation → feedback`
 
 The math, references, matcher, smoother, and MediaPipe boundary are separated under `src/pose/` so an ML classifier can be added later behind the same scoring interface.
 
@@ -16,10 +16,11 @@ The math, references, matcher, smoother, and MediaPipe boundary are separated un
 2. Register it in `src/pose/reference.ts` with its required landmarks, weights, tolerances, and camera angle.
 3. Open `/annotator`.
 4. Select the artwork and click the 13 body anchors: nose, shoulders, elbows, wrists, hips, knees, and ankles.
-5. Drag any point to correct it.
-6. Save the annotation. It is stored in browser `localStorage`.
-7. Export `jojo-reference-poses.json` when you want a portable/static copy.
-8. Try the reference in `/detector`.
+5. Switch to `FACE / 6` and mark both eyes, nose, mouth corners, and chin. The face zoom helps with small anime faces.
+6. Drag any point to correct it. Coordinates account for `object-fit: contain` letterboxing.
+7. Save the draft. It is stored in browser `localStorage`, but only a complete 19-point schema-2 annotation can match.
+8. Export `jojo-reference-poses.json` when you want a portable/static copy.
+9. Try the reference in `/detector`.
 
 ## Math
 
@@ -41,7 +42,7 @@ Each feature is converted to a Gaussian similarity:
 s_i = exp(-(error_i / sigma_i)^2)
 ```
 
-The pose score is the weighted mean of available feature similarities. Missing landmarks reduce quality; unannotated references are skipped completely.
+Face features are normalized by eye distance, so a face's size in the artwork does not dominate the score. The final complete-reference score is `75% body geometry + 25% face geometry`. Missing face or body landmarks prevent confirmation; incomplete references are skipped completely.
 
 ## Mirroring, smoothing, and feedback
 
@@ -53,7 +54,7 @@ Feedback is generated from the lowest-similarity features, such as torso lean, e
 
 ## MediaPipe and privacy
 
-The browser uses MediaPipe Tasks Vision Pose Landmarker with a Lite model. Webcam frames are processed locally by the browser and are not uploaded by this app. The app does not identify people or perform face recognition. MediaPipe runtime/model assets are loaded from their configured CDN URLs when the detector starts.
+The browser uses MediaPipe Tasks Vision Pose Landmarker and Face Landmarker. Webcam frames are processed locally by the browser and are not uploaded by this app. The app does not identify people or perform face recognition. MediaPipe runtime/model assets are loaded from their configured CDN URLs when the detector starts; GPU loading falls back to CPU loading when available.
 
 ## Limitations
 
@@ -61,6 +62,7 @@ The browser uses MediaPipe Tasks Vision Pose Landmarker with a Lite model. Webca
 - Perspective, foreshortening, occlusion, body proportions, camera angle, and landmark noise affect similarity.
 - `POSE MATCH` is a user-facing similarity measure, not model accuracy.
 - The initial reference annotations live in browser storage until explicitly exported.
+- A fresh browser or a different origin has separate annotation storage; annotate the references on the same localhost origin where you run the detector.
 
 ## Future ML interface
 

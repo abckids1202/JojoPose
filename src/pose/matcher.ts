@@ -1,11 +1,14 @@
 import { POSE_ENGINE_CONFIG } from './config'
 import { extractPoseFeatures, featureTolerances, regionForFeature } from './features'
+import { isReferenceReady } from './reference'
 import { gaussianSimilarity, weightedMean } from './math'
 import { mirrorFaceLandmarks, mirrorLandmarks } from './landmarks'
 import type { FaceLandmarkMap, LandmarkMap, PoseFeatures, PoseScore, ReferencePose } from './types'
 
 function scoreAgainst(reference: ReferencePose, current: PoseFeatures, mirrored: boolean): PoseScore {
-  if (!reference.annotation) return { poseId: reference.id, displayName: reference.displayName, percentage: 0, similarity: 0, mirrored, quality: 0, regions: { arms: 0, torso: 0, legs: 0, head: 0 }, feedback: ['Annotate this reference before matching.'], matchedFeatures: 0 }
+  const empty = (feedback: string[]): PoseScore => ({ poseId: reference.id, displayName: reference.displayName, percentage: 0, similarity: 0, mirrored, quality: current.quality, regions: { arms: 0, torso: 0, legs: 0, head: 0 }, feedback, matchedFeatures: 0, bodySimilarity: 0, faceSimilarity: 0, faceQuality: current.faceQuality })
+  if (!reference.annotation || !isReferenceReady(reference)) return empty(['Complete all body and face reference anchors before matching.'])
+  if (reference.requiredFaceLandmarks?.length && current.faceQuality < 1) return empty(['FACE NOT DETECTED — move your face into view.'])
   const referenceFeatures = extractPoseFeatures(reference.annotation.landmarks, reference.annotation.faceLandmarks)
   const errors: Array<{ name: string; error: number; similarity: number; weight: number }> = []
   const tolerances = { ...featureTolerances(referenceFeatures.values), ...reference.tolerances }
@@ -15,14 +18,19 @@ function scoreAgainst(reference: ReferencePose, current: PoseFeatures, mirrored:
     const error = Math.abs(actual - expected)
     errors.push({ name, error, similarity: gaussianSimilarity(error, tolerances[name] ?? POSE_ENGINE_CONFIG.defaultTolerance), weight: reference.weights[name] ?? 1 })
   }
-  const similarity = weightedMean(errors.map(item => ({ value: item.similarity, weight: item.weight }))) * Math.min(1, current.quality / POSE_ENGINE_CONFIG.minimumPoseQuality)
+  const bodyErrors = errors.filter(item => !item.name.startsWith('face_'))
+  const faceErrors = errors.filter(item => item.name.startsWith('face_'))
+  const bodySimilarity = weightedMean(bodyErrors.map(item => ({ value: item.similarity, weight: item.weight }))) * Math.min(1, current.quality / POSE_ENGINE_CONFIG.minimumPoseQuality)
+  const faceRequired = Boolean(reference.requiredFaceLandmarks?.length)
+  const faceSimilarity = faceRequired ? weightedMean(faceErrors.map(item => ({ value: item.similarity, weight: item.weight }))) * current.faceQuality : 0
+  const similarity = faceRequired ? bodySimilarity * POSE_ENGINE_CONFIG.bodyScoreWeight + faceSimilarity * POSE_ENGINE_CONFIG.faceScoreWeight : bodySimilarity
   const regions = { arms: 0, torso: 0, legs: 0, head: 0 }
   for (const region of Object.keys(regions) as Array<keyof typeof regions>) {
     const regionItems = errors.filter(item => regionForFeature(item.name) === region)
     regions[region] = weightedMean(regionItems.map(item => ({ value: item.similarity, weight: item.weight })))
   }
   const feedback = errors.sort((a, b) => a.similarity - b.similarity).slice(0, 3).filter(item => item.similarity < .86).map(item => feedbackFor(item.name, item.error, expectedDirection(referenceFeatures.values[item.name], current.values[item.name])))
-  return { poseId: reference.id, displayName: reference.displayName, percentage: Math.round(similarity * 1000) / 10, similarity, mirrored, quality: current.quality, regions, feedback, matchedFeatures: errors.length }
+  return { poseId: reference.id, displayName: reference.displayName, percentage: Math.round(similarity * 1000) / 10, similarity, mirrored, quality: current.quality, regions, feedback, matchedFeatures: errors.length, bodySimilarity, faceSimilarity, faceQuality: current.faceQuality }
 }
 
 function expectedDirection(reference: number, current: number): 'more' | 'less' { return current < reference ? 'more' : 'less' }
@@ -43,7 +51,7 @@ export function comparePose(reference: ReferencePose, currentPoints: LandmarkMap
 }
 
 export function scoreAllPoses(references: ReferencePose[], currentPoints: LandmarkMap, currentFacePoints: FaceLandmarkMap = {}): PoseScore[] {
-  return references.filter(reference => Boolean(reference.annotation)).map(reference => comparePose(reference, currentPoints, currentFacePoints)).sort((a, b) => b.similarity - a.similarity)
+  return references.filter(reference => isReferenceReady(reference)).map(reference => comparePose(reference, currentPoints, currentFacePoints)).sort((a, b) => b.similarity - a.similarity)
 }
 
 export function getBestMatch(references: ReferencePose[], currentPoints: LandmarkMap, currentFacePoints: FaceLandmarkMap = {}): PoseScore | undefined {

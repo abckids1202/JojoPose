@@ -15,6 +15,7 @@ export type FaceLandmarkMap = Partial<Record<FaceLandmarkName, Point2D>>
 export type FeatureName = string
 
 export interface PoseAnnotation {
+  schemaVersion: 1 | 2
   landmarks: LandmarkMap
   faceLandmarks?: FaceLandmarkMap
   imageWidth: number
@@ -55,9 +56,12 @@ export interface PoseScore {
   regions: { arms: number; torso: number; legs: number; head: number }
   feedback: string[]
   matchedFeatures: number
+  bodySimilarity: number
+  faceSimilarity: number
+  faceQuality: number
 }
 
-export type DetectorState = 'idle' | 'loading' | 'camera_denied' | 'camera_error' | 'model_loading' | 'ready' | 'no_match' | 'possible' | 'confirmed' | 'held'
+export type DetectorState = 'idle' | 'loading' | 'camera_denied' | 'camera_error' | 'model_loading' | 'model_error' | 'no_body' | 'no_face' | 'ready' | 'no_match' | 'possible' | 'confirmed' | 'held'
 
 export interface DetectorMetrics {
   fps: number
