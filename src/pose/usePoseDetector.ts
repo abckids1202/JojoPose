@@ -3,7 +3,9 @@ import { getBestMatch, scoreAllPoses } from './matcher'
 import { getReferencePoses, isReferenceReady } from './reference'
 import { mediaPipeFaceToLandmarks, mediaPipeToLandmarks } from './landmarks'
 import { TemporalPoseSmoother } from './smoother'
-import type { DetectorMetrics, DetectorState, FaceLandmarkMap, LandmarkMap, PoseScore, TemporalResult } from './types'
+import { extractPoseFeatures } from './features'
+import type { OnnxPoseClassifier } from '../model/onnxClassifier'
+import type { DetectorMetrics, DetectorState, FaceLandmarkMap, LandmarkMap, PoseFeatures, PoseScore, TemporalResult } from './types'
 
 const VISION_VERSION = '0.10.35'
 const WASM_ROOT = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VISION_VERSION}/wasm/`
@@ -45,15 +47,19 @@ export function usePoseDetector(targetId?: string) {
   const refsRef = useRef(getReferencePoses())
   const targetIdRef = useRef(targetId)
   targetIdRef.current = targetId
+  const classifierRef = useRef<OnnxPoseClassifier | null>(null)
+  const runTokenRef = useRef(0)
   const [state, setState] = useState<DetectorState>('idle')
   const [error, setError] = useState<string | undefined>()
   const [currentPoints, setCurrentPoints] = useState<LandmarkMap>({})
   const [currentFacePoints, setCurrentFacePoints] = useState<FaceLandmarkMap>({})
+  const [currentFeatures, setCurrentFeatures] = useState<PoseFeatures>(() => extractPoseFeatures({}))
   const [scores, setScores] = useState<PoseScore[]>([])
   const [temporal, setTemporal] = useState<TemporalResult>({ state: 'searching', holdMs: 0, stableFrames: 0 })
-  const [metrics, setMetrics] = useState<DetectorMetrics>({ fps: 0, inferenceMs: 0, usableLandmarks: 0, quality: 0, cameraReady: false, modelReady: false, faceModelReady: false })
+  const [metrics, setMetrics] = useState<DetectorMetrics>({ fps: 0, inferenceMs: 0, usableLandmarks: 0, quality: 0, cameraReady: false, modelReady: false, faceModelReady: false, classifierReady: false })
 
   const cleanup = useCallback(() => {
+    runTokenRef.current += 1
     if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
     frameRef.current = null
     streamRef.current?.getTracks().forEach(track => track.stop())
@@ -63,11 +69,12 @@ export function usePoseDetector(targetId?: string) {
   }, [])
 
   const stop = useCallback(() => {
-    cleanup(); smootherRef.current.reset(); setCurrentPoints({}); setCurrentFacePoints({}); setScores([]); setTemporal({ state: 'searching', holdMs: 0, stableFrames: 0 }); setMetrics({ fps: 0, inferenceMs: 0, usableLandmarks: 0, quality: 0, cameraReady: false, modelReady: false, faceModelReady: false }); setState('idle')
+    cleanup(); classifierRef.current = null; smootherRef.current.reset(); setCurrentPoints({}); setCurrentFacePoints({}); setCurrentFeatures(extractPoseFeatures({})); setScores([]); setTemporal({ state: 'searching', holdMs: 0, stableFrames: 0 }); setMetrics({ fps: 0, inferenceMs: 0, usableLandmarks: 0, quality: 0, cameraReady: false, modelReady: false, faceModelReady: false, classifierReady: false }); setState('idle')
   }, [cleanup])
 
   const start = useCallback(async () => {
-    cleanup(); setError(undefined); setState('loading'); setMetrics(previous => ({ ...previous, cameraReady: false, modelReady: false, faceModelReady: false }))
+    cleanup(); classifierRef.current = null; setError(undefined); setState('loading'); setMetrics(previous => ({ ...previous, cameraReady: false, modelReady: false, faceModelReady: false, classifierReady: false }))
+    const runToken = runTokenRef.current
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera access is unavailable. Open the app on localhost or HTTPS.')
       if (!window.isSecureContext && !['localhost', '127.0.0.1'].includes(window.location.hostname)) throw new Error('Camera access requires localhost or HTTPS.')
@@ -79,12 +86,16 @@ export function usePoseDetector(targetId?: string) {
       setMetrics(previous => ({ ...previous, cameraReady: true }))
       setState('model_loading')
       const landmarkers = await loadLandmarkers()
+      if (runToken !== runTokenRef.current) { landmarkers.pose.close(); landmarkers.face.close(); return }
       landmarkerRef.current = landmarkers.pose; faceLandmarkerRef.current = landmarkers.face
-      setMetrics(previous => ({ ...previous, modelReady: true, faceModelReady: true })); setState('ready')
+      const { OnnxPoseClassifier } = await import('../model/onnxClassifier')
+      classifierRef.current = await OnnxPoseClassifier.tryLoad().catch(() => null)
+      setMetrics(previous => ({ ...previous, modelReady: true, faceModelReady: true, classifierReady: Boolean(classifierRef.current) })); setState('ready')
       refsRef.current = getReferencePoses(); smootherRef.current.reset(); lastFrameRef.current = 0; fpsSamplesRef.current = []
-      const loop = () => {
+      const loop = async () => {
+        if (runToken !== runTokenRef.current) return
         const video = videoRef.current; const landmarker = landmarkerRef.current; const faceLandmarker = faceLandmarkerRef.current
-        if (!video || !landmarker || !faceLandmarker || video.readyState < 2) { frameRef.current = requestAnimationFrame(loop); return }
+        if (!video || !landmarker || !faceLandmarker || video.readyState < 2) { frameRef.current = requestAnimationFrame(() => { void loop() }); return }
         try {
           const now = performance.now(); const started = performance.now()
           const result = landmarker.detectForVideo(video, now)
@@ -92,15 +103,20 @@ export function usePoseDetector(targetId?: string) {
           const inferenceMs = performance.now() - started
           const points = mediaPipeToLandmarks(result.poseLandmarks?.[0] ?? [])
           const facePoints = mediaPipeFaceToLandmarks(faceResult.faceLandmarks?.[0] ?? [])
+          const features = extractPoseFeatures(points, facePoints)
           const nextScores = scoreAllPoses(refsRef.current, points, facePoints)
+          const classifierPrediction = classifierRef.current ? await classifierRef.current.predict(features.values).catch(() => undefined) : undefined
+          if (runToken !== runTokenRef.current) return
+          const geometricBest = getBestMatch(refsRef.current, points, facePoints)
+          const modelAgrees = !classifierPrediction || classifierPrediction.confidence < .6 || !geometricBest || geometricBest.poseId === classifierPrediction.label.toLowerCase()
           const focused = targetIdRef.current ? nextScores.find(item => item.poseId === targetIdRef.current && item.similarity >= .6) : undefined
-          const target = targetIdRef.current ? focused : getBestMatch(refsRef.current, points, facePoints)
+          const target = modelAgrees ? (targetIdRef.current ? focused : geometricBest) : undefined
           const nextTemporal = smootherRef.current.push(target, now)
           const delta = lastFrameRef.current ? now - lastFrameRef.current : 0
           if (delta > 0) fpsSamplesRef.current = [...fpsSamplesRef.current, 1000 / delta].slice(-20)
           lastFrameRef.current = now
-          setCurrentPoints(points); setCurrentFacePoints(facePoints); setScores(nextScores); setTemporal(nextTemporal)
-          setMetrics({ fps: fpsSamplesRef.current.reduce((a, b) => a + b, 0) / Math.max(1, fpsSamplesRef.current.length), inferenceMs, usableLandmarks: Object.keys(points).length, quality: target?.quality ?? 0, cameraReady: true, modelReady: true, faceModelReady: true })
+          setCurrentPoints(points); setCurrentFacePoints(facePoints); setCurrentFeatures(features); setScores(nextScores); setTemporal(nextTemporal)
+          setMetrics({ fps: fpsSamplesRef.current.reduce((a, b) => a + b, 0) / Math.max(1, fpsSamplesRef.current.length), inferenceMs, usableLandmarks: Object.keys(points).length, quality: features.quality, cameraReady: true, modelReady: true, faceModelReady: true, classifierReady: Boolean(classifierRef.current) })
           if (Object.keys(points).length === 0) setState('no_body')
           else if (Object.keys(facePoints).length === 0) setState('no_face')
           else setState(target ? 'ready' : 'no_match')
@@ -108,9 +124,9 @@ export function usePoseDetector(targetId?: string) {
           setError(cause instanceof Error ? cause.message : 'Landmark inference failed.')
           setState('camera_error')
         }
-        frameRef.current = requestAnimationFrame(loop)
+        frameRef.current = requestAnimationFrame(() => { void loop() })
       }
-      frameRef.current = requestAnimationFrame(loop)
+      frameRef.current = requestAnimationFrame(() => { void loop() })
     } catch (cause) {
       const domError = cause instanceof DOMException
       const message = domError && cause.name === 'NotAllowedError' ? 'Camera permission was denied. Allow access and try again.' : cause instanceof Error ? cause.message : 'Camera or pose model could not start.'
@@ -119,5 +135,5 @@ export function usePoseDetector(targetId?: string) {
   }, [cleanup, targetId])
 
   useEffect(() => () => cleanup(), [cleanup])
-  return { videoRef, state, error, currentPoints, currentFacePoints, scores, temporal, metrics, start, stop, retry: start, annotatedCount: refsRef.current.filter(isReferenceReady).length }
+  return { videoRef, state, error, currentPoints, currentFacePoints, currentFeatures, scores, temporal, metrics, start, stop, retry: start, annotatedCount: refsRef.current.filter(isReferenceReady).length }
 }

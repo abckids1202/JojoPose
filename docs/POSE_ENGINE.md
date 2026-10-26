@@ -8,7 +8,19 @@ This project now has a pre-training geometric pipeline. It does not pretend that
 
 `Webcam → MediaPipe Pose + Face Landmarkers → 13 body + 6 face landmarks → normalized features → compare complete references → temporal confirmation → feedback`
 
+`Webcam → quality gate → IndexedDB feature record → JSON/CSV export → participant-separated Random Forest → optional ONNX browser classifier`
+
 The math, references, matcher, smoother, and MediaPipe boundary are separated under `src/pose/` so an ML classifier can be added later behind the same scoring interface.
+
+## Collecting training data
+
+Open `/collector` after starting the app. Enter a participant ID, session ID, camera angle, and one of the labels `dio`, `giorno`, `jolyne`, `jonathan`, `metallica`, or `negative`. Start the camera, then record samples. Only frames with sufficient body and face quality are written to IndexedDB; video is not stored. Export JSON or CSV and train with:
+
+```powershell
+python training\train.py jojo-pose-dataset.csv --out models
+```
+
+The trainer groups the split by participant, prints validation/test metrics, and writes a Joblib model plus `models/pose_classifier.onnx` when ONNX conversion dependencies are installed. If the ONNX file is absent, the browser reports `GEOMETRIC FALLBACK` and continues using the explainable matcher.
 
 ## Annotating a new reference
 

@@ -71,6 +71,7 @@ export interface DetectorMetrics {
   cameraReady: boolean
   modelReady: boolean
   faceModelReady: boolean
+  classifierReady: boolean
 }
 
 export interface PoseLandmark3D extends Point2D {

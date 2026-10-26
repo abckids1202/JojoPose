@@ -1,0 +1,6 @@
+import { FEATURE_ORDER, type FeatureRecord } from './featureRecord'
+
+export function recordsToCsv(records: FeatureRecord[]): string { const header = ['id', 'pose_label', 'participant_id', 'session_id', 'camera_angle', 'timestamp', 'quality', 'face_quality', ...FEATURE_ORDER].join(','); const rows = records.map(record => [record.id, record.poseLabel, record.participantId, record.sessionId, record.cameraAngle, record.timestamp, record.quality, record.faceQuality, ...FEATURE_ORDER.map(name => record.features[name] ?? 0)].map(value => JSON.stringify(value)).join(',')); return [header, ...rows].join('\n') }
+export function downloadText(filename: string, content: string, type: string): void { const blob = new Blob([content], { type }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = filename; link.click(); URL.revokeObjectURL(link.href) }
+export function downloadJson(records: FeatureRecord[]): void { downloadText('jojo-pose-dataset.json', JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), featureOrder: FEATURE_ORDER, records }, null, 2), 'application/json') }
+export function downloadCsv(records: FeatureRecord[]): void { downloadText('jojo-pose-dataset.csv', recordsToCsv(records), 'text/csv') }
